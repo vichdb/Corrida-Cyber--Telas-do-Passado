@@ -36,6 +36,13 @@ h2{font-size:max(10px,1.75cqw);font-weight:500;color:#b7c3cf;line-height:1.45;ma
 .press-start{margin-top:2cqw;font-size:max(9px,1.3cqw);letter-spacing:.3em;color:#ff7ab6;text-transform:uppercase;animation:blink 1.2s infinite}
 .controls-hint{margin-top:1cqw;font-size:max(8px,1.25cqw);color:#7f8da0;line-height:1.5;max-width:46cqw}
 .controls-hint b{color:#9fe9e4}
+.history{margin-top:1cqw;font-size:max(9px,1.35cqw);color:#9fe9e4;line-height:1.5;max-width:46cqw}
+.submit-box{display:flex;flex-wrap:wrap;gap:1cqw;align-items:center;justify-content:center;margin:0 0 1.4cqw}
+.submit-box input{font-size:max(11px,1.8cqw);padding:1cqw 1.6cqw;border-radius:.8cqw;border:.2cqw solid #2fb5ad;background:rgba(10,20,32,.85);color:#eafffd;width:24cqw;min-width:130px;user-select:text;-webkit-user-select:text;outline:none;font-family:inherit}
+.submit-box input:focus{box-shadow:0 0 1.4cqw rgba(102,252,241,.7)}
+.submit-box .btn:disabled{opacity:.5;cursor:default;transform:none}
+#submit-status{flex-basis:100%;font-size:max(9px,1.35cqw);color:#9fe9e4;min-height:1.4em}
+.submit-note{flex-basis:100%;font-size:max(8px,1.2cqw);color:#7f8da0}
 .ranking-box{background:rgba(10,18,30,.72);border:.15cqw solid rgba(102,252,241,.45);border-radius:1cqw;padding:1.2cqw 1.8cqw;min-width:22cqw}
 #menu-screen.mode-title .ranking-box{position:absolute;right:3cqw;top:8.5cqw;text-align:left}
 .mode-over .ranking-box{margin-top:1.6cqw}
@@ -103,6 +110,12 @@ h2{font-size:max(10px,1.75cqw);font-weight:500;color:#b7c3cf;line-height:1.45;ma
       <p class="eyebrow title-only">100 fases • 10 chefes • 1 cidade neon</p>
       <h1 id="menu-title" class="logo">CYBER<br><span class="hot">RUNNER</span></h1>
       <h2 id="menu-subtitle"></h2>
+      <div id="submit-box" class="submit-box hidden">
+        <input id="nick-input" maxlength="12" placeholder="Seu apelido" autocomplete="off" spellcheck="false" aria-label="Seu apelido para o ranking">
+        <button id="submit-score-btn" class="btn" type="button">Enviar ao ranking</button>
+        <span class="submit-note">Só o apelido, os pontos e a fase são enviados, e ficam visíveis para todos.</span>
+        <p id="submit-status" role="status"></p>
+      </div>
       <div class="btn-group">
         <button id="continue-btn" class="btn hidden" type="button">Continuar</button>
         <button id="start-btn" class="btn" type="button">▶ Jogar</button>
@@ -111,9 +124,10 @@ h2{font-size:max(10px,1.75cqw);font-weight:500;color:#b7c3cf;line-height:1.45;ma
       </div>
       <p class="press-start title-only">Pressione ENTER ou ESPAÇO</p>
       <div class="controls-hint title-only"><b>ESPAÇO / ↑</b> pula (de novo no ar = pulo duplo) • <b>↓ / S</b> desliza • <b>ESC</b> pausa • <b>M</b> som</div>
+      <p id="texto-historico" class="history title-only"></p>
     </div>
     <div class="ranking-box">
-      <h3>🏆 Top 3 pontuações</h3>
+      <h3 id="ranking-title">🏆 Top 3 pontuações</h3>
       <ul id="ranking-list" class="ranking-list"></ul>
     </div>
   </div>
@@ -161,6 +175,10 @@ ctx.setTransform(PIXEL_RATIO,0,0,PIXEL_RATIO,0,0);
 const FRAME_MS=1000/60,MAX_PHASES=100,POINTS_PER_PHASE=220,MAX_HP=10;
 const RUN_SAVE_KEY='cyber_runner_100_run',RESULT_SAVE_KEY='cyber_runner_100_last_result';
 const gravity=0.65;
+/* RANKING GLOBAL: cole aqui o endereço do app da Web do Google Apps Script (termina em /exec).
+   Deixe vazio ('') para o jogo funcionar só com o ranking local. */
+const RANKING_URL='https://script.google.com/macros/s/AKfycbxyg3un7yjGej22HHERo3WCAZvNAf87pWPPfsGBtLyJtkw74K-91MxRN-9tYumpmQjm4w/exec';
+const NICK_KEY='cyber_runner_nick';
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),lerp=(a,b,t)=>a+(b-a)*t,rand=(a,b)=>a+Math.random()*(b-a);
 const TAU=Math.PI*2;
 
@@ -172,6 +190,7 @@ let currentPhase=1,playerHP=10,redOrbCount=0,shieldTimer=0,invulnerableTimer=0;
 let shake=0,flash=0,flashColor='255,0,85',banner=null,lastRunResult=null;
 let obstacles=[],orbs=[],particles=[],floaters=[];
 let lastHudScore=-1,lastHudPhase=-1,lastHudPct=-1;
+let runTime=0,pendingSubmit=null,globalTop=null;
 
 /* ---------- Áudio ---------- */
 function readSave(key){try{return localStorage.getItem(key);}catch(e){return null;}}
@@ -233,13 +252,53 @@ function saveHighScore(newScore){
   updateRankingUI();return ok;
 }
 function updateRankingUI(){
-  const scores=getHighScores();rankingList.innerHTML='';
-  if(!scores.length){const li=document.createElement('li');li.textContent='Ainda sem recordes. Seja o primeiro!';rankingList.appendChild(li);}
-  scores.forEach((item,i)=>{
+  const local=getHighScores(),useGlobal=Array.isArray(globalTop)&&globalTop.length>0;
+  const items=useGlobal?globalTop.slice(0,5).map(i=>({name:i.nick,score:i.score})):local.map(i=>({name:i.name,score:i.score}));
+  const title=$('ranking-title');if(title)title.textContent=useGlobal?'🌍 Ranking global':'🏆 Top 3 pontuações';
+  rankingList.innerHTML='';
+  if(!items.length){const li=document.createElement('li');li.textContent='Ainda sem recordes. Seja o primeiro!';rankingList.appendChild(li);}
+  items.forEach((item,i)=>{
     const li=document.createElement('li'),n=document.createElement('span'),p=document.createElement('b');
     n.textContent=`#${i+1} ${item.name}`;p.textContent=`${item.score} pts`;li.append(n,p);rankingList.appendChild(li);
   });
-  hudHigh.textContent=`Recorde: ${scores[0]?.score??0}`;
+  hudHigh.textContent=`Recorde: ${local[0]?.score??0}`;
+}
+function renderHistory(){
+  const el=$('texto-historico');if(!el)return;
+  let r=null;try{r=JSON.parse(readSave(RESULT_SAVE_KEY)||'null');}catch(e){}
+  const best=getHighScores()[0],parts=[];
+  if(best)parts.push(`Seu recorde: ${best.score} pts`);
+  if(r&&Number.isFinite(Number(r['pontuação'])))parts.push(`Última corrida: ${r['pontuação']} pts • Fase ${r['faseAlcançada']} • ${r.resultado}`);
+  el.textContent=parts.length?parts.join('  |  '):'Nenhum histórico ainda. Faça sua primeira corrida!';
+}
+const NICK_RE=/[^\p{L}\p{N} _.-]/gu;
+async function loadGlobalRanking(){
+  if(!RANKING_URL)return;
+  try{
+    const r=await fetch(`${RANKING_URL}?action=top`),j=await r.json();
+    if(j&&j.ok&&Array.isArray(j.top)){
+      globalTop=j.top.slice(0,10).map(i=>({nick:String(i.nick||'').slice(0,12),score:Math.max(0,Math.floor(Number(i.score)||0))}));
+      updateRankingUI();
+    }
+  }catch(e){}
+}
+function updateSubmitBox(mode){
+  const box=$('submit-box'),show=mode==='over'&&!!RANKING_URL&&!!pendingSubmit&&!pendingSubmit.sent&&pendingSubmit.score>0;
+  box.classList.toggle('hidden',!show);
+  if(show){$('nick-input').value=readSave(NICK_KEY)||'';$('submit-status').textContent='';$('submit-score-btn').disabled=false;}
+}
+async function submitScore(){
+  const btn=$('submit-score-btn'),status=$('submit-status');
+  if(!pendingSubmit||pendingSubmit.sent||!RANKING_URL)return;
+  const nick=$('nick-input').value.replace(NICK_RE,'').trim().slice(0,12);
+  if(!nick){status.textContent='Digite um apelido (letras e números).';return;}
+  writeSave(NICK_KEY,nick);btn.disabled=true;status.textContent='Enviando…';
+  const q=new URLSearchParams({action:'add',nick,score:pendingSubmit.score,phase:pendingSubmit.phase,t:Math.round(pendingSubmit.t),result:pendingSubmit.won?'win':'lose'});
+  try{
+    const r=await fetch(`${RANKING_URL}?${q}`),j=await r.json();
+    if(j&&j.ok){pendingSubmit.sent=true;status.textContent='Enviado! Veja sua posição no ranking.';loadGlobalRanking();}
+    else{status.textContent='Não foi possível enviar: '+((j&&j.error)||'erro');btn.disabled=false;}
+  }catch(e){status.textContent='Sem conexão. Tente de novo.';btn.disabled=false;}
 }
 function updateMenuButtons(){
   const saved=parseInt(readSave('cyber_runner_100_unlocked')||readSave('cyber_runner_60_unlocked'),10);
@@ -260,7 +319,7 @@ function showMenu(mode,titleHtml,subHtml){
   menuScreen.classList.toggle('mode-title',mode==='title');menuScreen.classList.toggle('mode-over',mode==='over');
   menuTitle.innerHTML=titleHtml;menuSubtitle.innerHTML=subHtml;
   menuScreen.classList.remove('hidden');pauseScreen.classList.add('hidden');howtoScreen.classList.add('hidden');howtoOpen=false;
-  setState('menu');updateMenuButtons();updateRankingUI();
+  setState('menu');updateMenuButtons();updateRankingUI();renderHistory();updateSubmitBox(mode);loadGlobalRanking();
   if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
 }
 function openHowto(){howtoOpen=true;howtoScreen.classList.remove('hidden');}
@@ -841,7 +900,7 @@ function readRunSave(){
 }
 function saveRunSnapshot(){
   if(!isPlaying||dying)return false;
-  const s={version:1,score:Math.max(0,score),currentPhase,playerHP,redOrbCount,shieldTimer,invulnerableTimer,frameCount,obstacleSpawnTimer,orbSpawnTimer,
+  const s={version:1,score:Math.max(0,score),runTime,currentPhase,playerHP,redOrbCount,shieldTimer,invulnerableTimer,frameCount,obstacleSpawnTimer,orbSpawnTimer,
     player:{y:player.y,velocityY:player.velocityY,isGrounded:player.isGrounded,jumpsLeft:player.jumpsLeft,isDuck:player.isDuck,animFrame:player.animFrame},
     obstacles:obstacles.slice(0,100).map(o=>({x:o.x,y:o.y,width:o.width,height:o.height,isFlying:o.isFlying,kind:o.kind,seed:o.seed})),
     orbs:orbs.slice(0,100).map(o=>({x:o.x,y:o.y,width:o.width,height:o.height,collected:o.collected,type:o.type,color:o.color}))};
@@ -850,7 +909,7 @@ function saveRunSnapshot(){
 function restoreSavedRun(){
   const s=readRunSave();if(!s)return false;
   initAudio();
-  score=s.score;currentPhase=s.currentPhase;playerHP=s.playerHP;
+  score=s.score;runTime=Math.max(Number(s.runTime)||0,s.score/90);currentPhase=s.currentPhase;playerHP=s.playerHP;
   redOrbCount=clamp(Number(s.redOrbCount)||0,0,10);shieldTimer=Math.max(0,Number(s.shieldTimer)||0);
   invulnerableTimer=Math.max(60,Number(s.invulnerableTimer)||0);frameCount=Math.max(0,Number(s.frameCount)||0);
   obstacleSpawnTimer=0;nextObstacleIn=60;orbSpawnTimer=Math.max(0,Number(s.orbSpawnTimer)||0);graceTimer=0;
@@ -902,6 +961,7 @@ function startGame(fromUnlocked){
   initAudio();isPlaying=true;isPaused=false;dying=false;removeSave(RUN_SAVE_KEY);lastRunResult=null;downloadResultBtn.classList.add('hidden');
   playerHP=MAX_HP;redOrbCount=0;shieldTimer=0;invulnerableTimer=0;
   if(fromUnlocked){currentPhase=unlockedPhase;score=(currentPhase-1)*POINTS_PER_PHASE;}else{currentPhase=1;score=0;}
+  runTime=score/90;
   frameCount=0;obstacles=[];orbs=[];particles=[];floaters=[];banner=null;
   obstacleSpawnTimer=0;nextObstacleIn=70;orbSpawnTimer=0;autosaveTimer=0;graceTimer=70;lastFrameTime=0;shake=0;flash=0;
   targetSpeed=gameSpeed=5.5+(currentPhase-1)*.075;lastHudScore=-1;lastHudPhase=-1;lastHudPct=-1;
@@ -911,12 +971,14 @@ function startGame(fromUnlocked){
 }
 function gameOver(){
   isPlaying=false;isPaused=false;dying=false;
+  pendingSubmit={score:Math.floor(score),phase:currentPhase,t:runTime,won:false,sent:false};
   const r=saveHighScore(Math.floor(score)),s=saveFinishedResult(false);
   const msg=r&&s?'Pontuação salva neste navegador.':'Baixe o resultado para guardar uma cópia.';
   showMenu('over','GAME OVER',`Suas vidas acabaram na <b>Fase ${currentPhase}</b><br>Pontuação final: <b>${Math.floor(score)}</b><br><small>${msg}</small>`);
 }
 function gameWin(){
   isPlaying=false;isPaused=false;dying=false;
+  pendingSubmit={score:Math.floor(score),phase:currentPhase,t:runTime,won:true,sent:false};
   const r=saveHighScore(Math.floor(score)),s=saveFinishedResult(true);
   removeSave('cyber_runner_100_unlocked');removeSave('cyber_runner_60_unlocked');unlockedPhase=1;
   const msg=r&&s?'Resultado salvo neste navegador.':'Baixe o resultado para guardar uma cópia.';
@@ -935,7 +997,7 @@ function renderGame(d){
   drawFx();ctx.restore();drawBanner(d);drawOverlay();
 }
 function stepGame(d){
-  if(!dying)score+=.5*d;
+  if(!dying){score+=.5*d;runTime+=d/60;}
   gameSpeed+=(targetSpeed-gameSpeed)*Math.min(1,.05*d);
   if(dying){gameSpeed*=Math.pow(.94,d);dyingTimer-=d;}
   checkPhaseProgression();if(!isPlaying)return;
@@ -968,6 +1030,7 @@ function primaryAction(){
   if(!continueBtn.classList.contains('hidden'))continueBtn.click();else startBtn.click();
 }
 window.addEventListener('keydown',e=>{
+  if(e.target&&e.target.tagName==='INPUT'){if(e.code==='Enter'){e.preventDefault();submitScore();}return;}
   if(e.code==='KeyM'&&!e.repeat){toggleMute();return;}
   if(e.code==='Escape'||e.code==='KeyP'){
     e.preventDefault();if(e.repeat)return;
@@ -1005,6 +1068,7 @@ downloadResultBtn.addEventListener('click',downloadFinishedResult);
 howtoBtn.addEventListener('click',openHowto);
 howtoCloseBtn.addEventListener('click',closeHowto);
 soundBtn.addEventListener('click',()=>{initAudio();toggleMute();});
+$('submit-score-btn').addEventListener('click',submitScore);
 
 soundBtn.textContent=muted?'🔇':'🔊';
 player.reset();updateHPUI();showMenu('title',TITLE_HTML,TITLE_SUB);
