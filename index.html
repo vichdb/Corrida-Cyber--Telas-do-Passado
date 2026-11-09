@@ -74,6 +74,11 @@ h2{font-size:max(10px,1.75cqw);font-weight:500;color:#b7c3cf;line-height:1.45;ma
 .touch-controls button:active{background:rgba(69,162,158,.8)}
 #game-container:not([data-state="play"]) .touch-controls,#game-container:not([data-state="play"]) #hud{display:none}
 @media (pointer:coarse),(max-width:600px){#game-container[data-state="play"] .touch-controls{display:flex}}
+@media (orientation:portrait) and (max-width:700px) and (pointer:coarse){
+  body{padding:0}
+  #game-container{position:fixed;top:50%;left:50%;width:min(calc(100dvh - 16px),calc((100vw - 16px) * 17 / 9));transform:translate(-50%,-50%) rotate(90deg)}
+}
+@media (pointer:coarse){.controls-hint,.press-start{display:none}}
 @keyframes flicker{0%,18%,22%,62%,64%,100%{opacity:1}20%,63%{opacity:.78}}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
 @keyframes pulse{from{opacity:.6}to{opacity:1}}
@@ -835,13 +840,32 @@ function spawnOrbs(){
     for(let i=0;i<5;i++)orbs.push(new Orb('white',GAME_WIDTH+20+i*34,baseY-70*Math.sin(Math.PI*i/4)));
   }else orbs.push(new Orb(null,GAME_WIDTH+20,rand(215,345)));
 }
+function spawnObstacle(){
+  const p=currentPhase,boss=p%10===0;
+  const chance=p<6?0:Math.min(.5,.08+(p-6)*.012+(boss?.12:0));
+  if(Math.random()<chance){
+    const opts=[['spike','spike']];
+    if(p>=10)opts.push(['spike','wall']);
+    if(p>=12)opts.push(['spike','droneLow'],['droneLow','spike']);
+    if(p>=14)opts.push(['wall','spike']);
+    const[k1,k2]=opts[Math.floor(Math.random()*opts.length)];
+    const a=new Obstacle(k1),b=new Obstacle(k2);
+    if(k1==='spike'){a.width=34;a.x=GAME_WIDTH+a.width;}
+    if(k2==='spike')b.width=34;
+    b.x=a.x+a.width+70+Math.random()*150;
+    obstacles.push(a,b);
+    return(b.x+b.width-a.x)/gameSpeed;
+  }
+  obstacles.push(new Obstacle());
+  return 0;
+}
 function spawnElements(d){
   frameCount+=d;
   if(graceTimer>0){graceTimer-=d;return;}
   obstacleSpawnTimer+=d;orbSpawnTimer+=d;
   if(obstacleSpawnTimer>=nextObstacleIn){
-    obstacles.push(new Obstacle());obstacleSpawnTimer=0;
-    nextObstacleIn=Math.max(62,(100-currentPhase*1.2)*(.85+Math.random()*.5));
+    const extra=spawnObstacle();obstacleSpawnTimer=0;
+    nextObstacleIn=Math.max(56,(96-currentPhase*.9)*(.85+Math.random()*.5))+extra;
   }
   if(orbSpawnTimer>=85){spawnOrbs();orbSpawnTimer=0;}
 }
